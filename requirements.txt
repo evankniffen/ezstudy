@@ -1,0 +1,6 @@
+requests
+wikipedia
+google-generativelanguage
+pyspellchecker
+Pillow
+pytesseract
