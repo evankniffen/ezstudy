@@ -2,16 +2,23 @@ import os
 import re
 import requests
 import wikipedia
+from flask import Flask, request, jsonify
 from google import genai
-from wikipedia_fetcher import fetch_wikipedia_summary
 from spellchecker import SpellChecker
+import wikipedia
 
+
+# Replace with your actual credentials
 WOLFRAM_APPID = "HPQQ9Y-734KXXQEE3"
 GEMINI_API_KEY = "AIzaSyBXLFpQHahdMYY4KGWtSFEmouexhXCUtPc"
 TRAINING_DATA_FILE = "training_data.txt"
 
+app = Flask(__name__)
+
 spell = SpellChecker()
+# Global conversation history (in production, consider per-session storage)
 conversation_history = []
+# Regex pattern to protect math expressions (e.g., "3x3")
 math_expr_pattern = re.compile(r'^\d+x\d+$', re.IGNORECASE)
 
 def correct_query(query):
@@ -30,10 +37,21 @@ def get_conversation_context():
     """Return the full conversation history as a single string."""
     return "\n".join(conversation_history)
 
+def fetch_wikipedia_summary(topic):
+    """
+    Fetch a summary of the given topic from Wikipedia.
+    Returns a summary string, or an error message if fetching fails.
+    """
+    try:
+        summary = wikipedia.summary(topic, sentences=5)
+        return summary
+    except Exception as e:
+        return f"Error fetching Wikipedia article for '{topic}': {e}"
+
 def is_academic_query(query):
     """
     Use Gemini to decide if the query is academic.
-    Respond with one word: 'Academic' if academic, 'Trivial' if not.
+    Respond with exactly one word: 'Academic' if academic, 'Trivial' if not.
     """
     client = genai.Client(api_key=GEMINI_API_KEY)
     prompt = (
@@ -58,7 +76,8 @@ def add_training_data(new_data):
     """Append new training data to the training file."""
     with open(TRAINING_DATA_FILE, "a", encoding="utf-8") as f:
         f.write(new_data.strip() + "\n")
-    print("Training data added.\n")
+    # In an API, you might log this instead of printing.
+    return
 
 def add_transcribed_text(transcribed_text):
     """
@@ -69,9 +88,9 @@ def add_transcribed_text(transcribed_text):
         add_training_data(transcribed_text)
         auto_add_related_wikipedia(transcribed_text)
         conversation_history.append(f"Transcribed Text: {transcribed_text}")
-        print("Transcribed text added to training data.")
+        return True
     else:
-        print("No transcribed text provided to add.\n")
+        return False
 
 def detect_wikipedia_relevance(query):
     """
@@ -94,30 +113,27 @@ def auto_add_related_wikipedia(query):
     For each found article, fetch its summary and add it to training data.
     """
     if detect_wikipedia_relevance(query):
-        print("Gemini indicates additional Wikipedia context is beneficial.")
         try:
             results = wikipedia.search(query, results=3)
             if results:
-                print("Automatically adding related Wikipedia summaries to training data:")
                 for title in results:
                     summary = fetch_wikipedia_summary(title)
                     add_training_data(f"Summary for {title}: {summary}")
         except Exception as e:
-            print("Error while auto-adding Wikipedia articles:", e)
-    else:
-        print("Gemini determined no additional Wikipedia context is necessary.")
+            pass
+    return
 
 def extract_math_problem(query):
     """
-    Use Gemini to extract only the math problem part from a larger query.
-    For example, given 'can you integrate 5x+4 for me', return 'integrate 5x+4'.
-    If no math problem can be isolated, return an empty string.
+    Use Gemini to extract only the math problem directive from a larger query.
+    For example, if given "can you integrate 5x+4 for me", return "integrate 5x+4".
+    If no math problem is isolated, return an empty string.
     """
     client = genai.Client(api_key=GEMINI_API_KEY)
     prompt = (
         "You are a math assistant. Given the following sentence, extract only the math problem directive, "
-        "removing any conversational fluff. For example, if given 'can you integrate 5x+4 for me', return 'integrate 5x+4'. "
-        "If no math problem is present, return an empty string.\n\n"
+        "removing any conversational or extraneous content. For example, if given 'can you integrate 5x+4 for me', return 'integrate 5x+4'. "
+        "If no clear math problem is present, return an empty string.\n\n"
         f"Sentence: {query}\n\nMath Problem:"
     )
     response = client.models.generate_content(model="gemini-2.0-flash", contents=prompt)
@@ -164,23 +180,25 @@ def summarize_with_gemini(text):
     prompt = (
         "You are an experienced academic tutor. Using the following training data and conversation history as context, "
         "please summarize the Wolfram|Alpha output into a clear, concise explanation (max 150 words). "
-        "Include step-by-step solutions only if necessary.\n\nTraining Data:\n" + training_data + "\n\n"
-        "Conversation History:\n" + conversation_context + "\n\n"
-        "Wolfram|Alpha Output:\n" + text
+        "Include step-by-step solutions only if necessary.\n\n"
+        f"Training Data:\n{training_data}\n\n"
+        f"Conversation History:\n{conversation_context}\n\n"
+        f"Wolfram|Alpha Output:\n{text}"
     )
     response = client.models.generate_content(model="gemini-2.0-flash", contents=prompt)
     return response.text
 
 def direct_chat(query, conversation_context):
     """
-    Use Gemini's general chat functionality for nonacademic queries.
+    Use Gemini's normal chat functionality for nonacademic queries.
     Provide a casual, conversational answer.
     """
     client = genai.Client(api_key=GEMINI_API_KEY)
     prompt = (
-        "You are a friendly chatbot. Here is the conversation so far:\n" + conversation_context + "\n\n"
+        "You are a friendly chatbot. Here is the conversation so far:\n"
+        f"{conversation_context}\n\n"
         "Now answer the following question in a casual, concise, and helpful manner:\n"
-        "Question: " + query
+        f"Question: {query}"
     )
     response = client.models.generate_content(model="gemini-2.0-flash", contents=prompt)
     return response.text
@@ -198,114 +216,93 @@ def direct_gemini(query, conversation_context):
         "Using the following training data and conversation history as background context, please answer the following question "
         "in a clear, comprehensive, and educational manner (around 100–150 words). "
         "If the answer is not present in the training data, please perform a brief Google search and incorporate the most relevant, up-to-date information.\n\n"
-        "Training Data:\n" + training_data + "\n\n"
-        "Conversation History:\n" + conversation_context + "\n\n"
-        "Question: " + query
+        f"Training Data:\n{training_data}\n\n"
+        f"Conversation History:\n{conversation_context}\n\n"
+        f"Question: {query}"
     )
     response = client.models.generate_content(model="gemini-2.0-flash", contents=prompt)
     return response.text
 
-def main():
-    global conversation_history
-    print("Academic Chatbot started.")
-    print("Type 'quit' or 'exit' to stop.")
-    print("Commands:")
-    print("  ADD TRAINING: <text>         - Add text to training data")
-    print("  ADD FILE: <filepath>         - Add content from a text file to training data")
-    print("  ADD TRANSCRIBED: <text>      - Add previously transcribed text to training data")
-    print("  ADD WIKIPEDIA: <topic>       - Fetch and add a Wikipedia summary for the given topic to training data\n")
-    
-    while True:
-        user_input = input("You: ").strip()
-        if user_input.lower() in ("quit", "exit"):
-            print("Goodbye!")
-            break
+@app.route('/chat', methods=['POST'])
+def chat():
+    data = request.get_json()
+    query = data.get("query", "").strip()
+    if not query:
+        return jsonify({"error": "No query provided."}), 400
 
-        corrected_query = correct_query(user_input)
-        if corrected_query.lower() != user_input.lower():
-            print(f"\nInterpreting query as: {corrected_query}")
+    corrected_query = correct_query(query)
+    # Optionally, you can include the corrected query in the JSON response.
+    # Process transcribed text command if present.
+    if corrected_query.lower().startswith("add transcribed:"):
+        transcribed_text = corrected_query[len("add transcribed:"):].strip()
+        if add_transcribed_text(transcribed_text):
+            return jsonify({"message": "Transcribed text added to training data."})
         else:
-            corrected_query = user_input
+            return jsonify({"error": "No transcribed text provided."}), 400
 
-        if corrected_query.lower().startswith("add transcribed:"):
-            transcribed_text = corrected_query[len("add transcribed:"):].strip()
-            add_transcribed_text(transcribed_text)
-            continue
-
-        if corrected_query.lower().startswith("add training:"):
-            new_data = corrected_query[len("add training:"):].strip()
-            if new_data:
-                add_training_data(new_data)
-            else:
-                print("No training data provided to add.\n")
-            continue
-
-        if corrected_query.lower().startswith("add file:"):
-            file_path = corrected_query[len("add file:"):].strip()
-            if os.path.exists(file_path):
-                try:
-                    with open(file_path, "r", encoding="utf-8") as f:
-                        file_content = f.read()
-                    add_training_data(file_content)
-                except Exception as e:
-                    print("Error reading file:", e)
-            else:
-                print("File not found.\n")
-            continue
-
-        if corrected_query.lower().startswith("add wikipedia:"):
-            topic = corrected_query[len("add wikipedia:"):].strip()
-            if topic:
-                summary = fetch_wikipedia_summary(topic)
-                add_training_data(summary)
-            else:
-                print("No topic provided for Wikipedia lookup.\n")
-            continue
-
-        # Auto-add related Wikipedia context for the query.
-        auto_add_related_wikipedia(corrected_query)
-        conversation_context = get_conversation_context()
-
-        # If the query involves math, isolate the math problem using Gemini.
-        if detect_math_with_gemini(corrected_query):
-            math_problem = extract_math_problem(corrected_query)
-            if not math_problem:
-                math_problem = corrected_query
-            print("\nMath detected by Gemini. Querying Wolfram|Alpha with:", math_problem)
-            success, wolfram_output = query_wolfram(math_problem)
-            if success:
-                print("\nSummarizing Wolfram output with Gemini...")
-                bot_response = summarize_with_gemini(wolfram_output)
-            else:
-                print("\nWolfram|Alpha returned an error. Falling back to academic Gemini answer.")
-                bot_response = direct_gemini(corrected_query, conversation_context)
+    if corrected_query.lower().startswith("add training:"):
+        new_data = corrected_query[len("add training:"):].strip()
+        if new_data:
+            add_training_data(new_data)
+            return jsonify({"message": "Training data added."})
         else:
-            if not is_academic_query(corrected_query):
-                bot_response = direct_chat(corrected_query, conversation_context)
-            else:
-                bot_response = direct_gemini(corrected_query, conversation_context)
+            return jsonify({"error": "No training data provided."}), 400
 
-        print("\nBot:", bot_response)
-        conversation_history.append(f"You: {corrected_query}")
-        conversation_history.append(f"Bot: {bot_response}")
-        print()
+    if corrected_query.lower().startswith("add file:"):
+        file_path = corrected_query[len("add file:"):].strip()
+        if os.path.exists(file_path):
+            try:
+                with open(file_path, "r", encoding="utf-8") as f:
+                    file_content = f.read()
+                add_training_data(file_content)
+                return jsonify({"message": "File content added to training data."})
+            except Exception as e:
+                return jsonify({"error": f"Error reading file: {e}"}), 500
+        else:
+            return jsonify({"error": "File not found."}), 404
+
+    if corrected_query.lower().startswith("add wikipedia:"):
+        topic = corrected_query[len("add wikipedia:"):].strip()
+        if topic:
+            summary = fetch_wikipedia_summary(topic)
+            add_training_data(summary)
+            return jsonify({"message": "Wikipedia summary added to training data."})
+        else:
+            return jsonify({"error": "No topic provided for Wikipedia lookup."}), 400
+
+    # Auto-add related Wikipedia context for the query.
+    auto_add_related_wikipedia(corrected_query)
+    conversation_context = get_conversation_context()
+
+    # Process query: if math is detected, isolate math problem.
+    if detect_math_with_gemini(corrected_query):
+        math_problem = extract_math_problem(corrected_query)
+        if not math_problem:
+            math_problem = corrected_query
+        success, wolfram_output = query_wolfram(math_problem)
+        if success:
+            bot_response = summarize_with_gemini(wolfram_output)
+        else:
+            bot_response = direct_gemini(corrected_query, conversation_context)
+    else:
+        if not is_academic_query(corrected_query):
+            bot_response = direct_chat(corrected_query, conversation_context)
+        else:
+            bot_response = direct_gemini(corrected_query, conversation_context)
+
+    conversation_history.append(f"You: {corrected_query}")
+    conversation_history.append(f"Bot: {bot_response}")
+
+    return jsonify({
+        "query": corrected_query,
+        "response": bot_response,
+        "conversation_history": conversation_history
+    })
+
+@app.route("/")
+def index():
+    return "Server is running!"
+
 
 if __name__ == '__main__':
-    main()
-    
-def extract_math_problem(query):
-    """
-    Use Gemini to extract only the math problem directive from a larger query.
-    For example, if given "can you integrate 5x+4 for me", return "integrate 5x+4".
-    If no math problem can be isolated, return an empty string.
-    """
-    client = genai.Client(api_key=GEMINI_API_KEY)
-    prompt = (
-        "You are a math assistant. Extract only the math problem directive from the following text, removing any conversational or extraneous content. "
-        "For example, if given 'can you integrate 5x+4 for me', return 'integrate 5x+4'. "
-        "If no clear math problem is present, return an empty string.\n\n"
-        f"Text: {query}\n\nMath Problem:"
-    )
-    response = client.models.generate_content(model="gemini-2.0-flash", contents=prompt)
-    math_problem = response.text.strip()
-    return math_problem
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
