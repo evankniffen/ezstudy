@@ -1,6 +1,4 @@
 requests
 wikipedia
-google-generativelanguage
+google-genai
 pyspellchecker
-Pillow
-pytesseract
