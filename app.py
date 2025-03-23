@@ -22,7 +22,7 @@ spell = SpellChecker()
 # Global conversation history (in production, consider per-session storage)
 conversation_history = []
 # Regex pattern to protect math expressions (e.g., "3x3")
-math_expr_pattern = re.compile(r'^\d+x\d+$', re.IGNORECASE)
+math_expr_pattern = re.compile(r'^\d+[xX](=\d+)?$', re.IGNORECASE)
 
 def correct_query(query):
     """Correct typos in the query using pyspellchecker, skipping words that match math expressions."""
