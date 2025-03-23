@@ -2,11 +2,14 @@ import os
 import re
 import requests
 import wikipedia
+import werkzeug.urls
+from urllib.parse import quote as url_quote
+werkzeug.urls.url_quote = url_quote
 from flask import Flask, request, jsonify
 from google import genai
 from spellchecker import SpellChecker
 import wikipedia
-from urllib.parse import quote as url_quote
+
 
 # Replace with your actual credentials
 WOLFRAM_APPID = "HPQQ9Y-734KXXQEE3"
