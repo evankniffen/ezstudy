@@ -130,13 +130,14 @@ def extract_math_problem(query):
     """
     Use Gemini to extract only the math problem directive from a larger query.
     For example, if given "can you integrate 5x+4 for me", return "integrate 5x+4".
-    If no math problem is isolated, return an empty string.
+    If no math problem is isolated, return an empty string. 
     """
     client = genai.Client(api_key=GEMINI_API_KEY)
     prompt = (
         "You are a math assistant. Given the following sentence, extract only the math problem directive, "
         "removing any conversational or extraneous content. For example, if given 'can you integrate 5x+4 for me', return 'integrate 5x+4'. "
-        "If no clear math problem is present, return an empty string.\n\n"
+        "However, ensure math vocabulary is included, as it can be important; assess importance on context"
+        ". If no clear math problem is present, return an empty string.\n\n"
         f"Sentence: {query}\n\nMath Problem:"
     )
     response = client.models.generate_content(model="gemini-2.0-flash", contents=prompt)
@@ -200,7 +201,8 @@ def direct_chat(query, conversation_context):
     prompt = (
         "You are a friendly chatbot. Here is the conversation so far:\n"
         f"{conversation_context}\n\n"
-        "Now answer the following question in a casual, concise, and helpful manner:\n"
+        "Now answer the following question in a casual, concise, and helpful manner, don't use extraneous information"
+        "like the title of notes, unless explictly told otherwise:\n"
         f"Question: {query}"
     )
     response = client.models.generate_content(model="gemini-2.0-flash", contents=prompt)
@@ -280,7 +282,7 @@ def chat():
     # Process query: if math is detected, isolate math problem.
     if detect_math_with_gemini(corrected_query):
         math_problem = extract_math_problem(corrected_query)
-        if not math_problem:
+        if not math_problem and math_problem!="":
             math_problem = corrected_query
         success, wolfram_output = query_wolfram(math_problem)
         if success:
